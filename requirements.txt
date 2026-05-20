@@ -1,0 +1,9 @@
+transformers==4.49.0
+accelerate
+pillow
+qwen-vl-utils
+sentencepiece
+protobuf
+safetensors
+opencv-python
+bitsandbytes
