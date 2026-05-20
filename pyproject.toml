@@ -1,0 +1,28 @@
+[project]
+name = "arabic-handwritten-ocr"
+version = "0.1.0"
+description = "OCR for handwritten Arabic text using Qwen2.5-VL"
+requires-python = ">=3.10"
+
+# torch and torchvision are NOT listed here.
+# They must be installed with an explicit CUDA index URL (see setup.sh).
+dependencies = [
+    "transformers>=4.49.0",
+    "accelerate>=0.24.0",
+    "pillow>=10.0.0",
+    "qwen-vl-utils>=0.0.2",
+    "sentencepiece>=0.1.99",
+    "protobuf>=3.20.0",
+    "safetensors>=0.4.0",
+    "opencv-python>=4.8.0",
+    "numpy>=1.24.0",
+    "bitsandbytes>=0.41.0",
+]
+
+[tool.setuptools]
+py-modules = []
+packages = []
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"

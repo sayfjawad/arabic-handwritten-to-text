@@ -6,23 +6,14 @@ ENV PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 ENV HF_HOME=/workspace/.cache/huggingface
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git \
-    curl \
-    wget \
-    vim \
-    nano \
-    libglib2.0-0 \
-    libgl1 \
-    libsm6 \
-    libxext6 \
-    libxrender1 \
+    git curl vim nano \
+    libglib2.0-0 libgl1 libsm6 libxext6 libxrender1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /workspace
 
-COPY requirements.txt /tmp/requirements.txt
-
-RUN python -m pip install --upgrade pip setuptools wheel packaging && \
-    python -m pip install -r /tmp/requirements.txt
+# torch and torchvision are provided by the base image; only install the rest.
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
 CMD ["bash"]

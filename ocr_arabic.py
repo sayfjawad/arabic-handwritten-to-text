@@ -40,16 +40,46 @@ def force_lm_head_to_embeddings(model):
     return model
 
 
+def single_gpu_device_config():
+    """Return (device_map, max_memory) that keeps the full model on one device.
+
+    device_map="auto" without memory limits splits the model across all visible
+    GPUs, which breaks Qwen2.5-VL inference because visual and text tokens end
+    up on different devices.  We restrict GPU allocation to the GPU with the
+    most free VRAM; any overflow spills to CPU RAM via accelerate's offload.
+    """
+    if not torch.cuda.is_available():
+        return "cpu", None
+
+    n = torch.cuda.device_count()
+    free_gb = [torch.cuda.mem_get_info(i)[0] / 1024 ** 3 for i in range(n)]
+    best = max(range(n), key=lambda i: free_gb[i])
+    free = free_gb[best]
+
+    # Only grant memory to the chosen GPU; other GPUs get nothing.
+    # accelerate will spill to CPU if the model doesn't fit.
+    max_memory = {i: "0GiB" for i in range(n)}
+    max_memory[best] = f"{int(free * 0.9)}GiB"
+    max_memory["cpu"] = "32GiB"
+
+    print(f"Using GPU {best}: {torch.cuda.get_device_name(best)} ({free:.1f} GiB free)")
+    return "auto", max_memory
+
+
 def load_model():
     print("=" * 80)
     print(f"Loading model: {MODEL_NAME}")
     print("=" * 80)
 
+    device_map, max_memory = single_gpu_device_config()
+
     model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
         MODEL_NAME,
         torch_dtype=torch.float16,
-        device_map="auto",
+        device_map=device_map,
+        max_memory=max_memory,
         trust_remote_code=True,
+        attn_implementation="eager",  # flash_attn not installed; use standard attention
     )
 
     model = force_lm_head_to_embeddings(model)
@@ -87,13 +117,14 @@ def extract_text_from_image(model, processor, image_path):
 
     image_inputs, video_inputs = process_vision_info(messages)
 
+    device = next(model.parameters()).device
     inputs = processor(
         text=[text],
         images=image_inputs,
         videos=video_inputs,
         padding=True,
         return_tensors="pt",
-    ).to(model.device)
+    ).to(device)
 
     with torch.inference_mode():
         generated_ids = model.generate(
