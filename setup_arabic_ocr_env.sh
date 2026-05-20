@@ -36,7 +36,9 @@ python -m pip install --upgrade pip setuptools wheel packaging
 
 echo
 echo "[5/7] Installing PyTorch CUDA 12.1 build..."
-python -m pip install --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+# We use --extra-index-url so it can fall back to PyPI if a specific component is missing in the CUDA index.
+# We also remove torchaudio as it's not required for this OCR project and often lacks 3.13 + CUDA builds.
+python -m pip install --upgrade torch torchvision --extra-index-url https://download.pytorch.org/whl/cu121
 
 echo
 echo "[6/7] Installing OCR/model dependencies..."
@@ -57,7 +59,6 @@ cat > requirements.txt <<'REQ'
 --extra-index-url https://download.pytorch.org/whl/cu121
 torch
 torchvision
-torchaudio
 transformers
 accelerate
 pillow
@@ -96,6 +97,11 @@ PY
 echo
 echo "============================================================"
 echo "Setup complete."
+echo
+echo "Note about Conda Error:"
+echo "If you see 'anaconda-auth (cannot import name RootModel)', run:"
+echo "  conda update -n base anaconda-auth"
+echo "  or: /home/sayf/miniconda3/bin/python -m pip install --upgrade pydantic"
 echo
 echo "Use:"
 echo "  cd $PROJECT_DIR"
