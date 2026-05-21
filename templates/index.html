@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Arabic OCR</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: #0f0f13;
+      color: #e8e8f0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 2rem 1rem;
+    }
+
+    h1 {
+      font-size: 1.8rem;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      margin-bottom: 0.4rem;
+      background: linear-gradient(135deg, #a78bfa, #60a5fa);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .subtitle {
+      color: #6b7280;
+      font-size: 0.9rem;
+      margin-bottom: 2rem;
+      direction: ltr;
+    }
+
+    .card {
+      background: #1a1a24;
+      border: 1px solid #2d2d40;
+      border-radius: 16px;
+      padding: 2rem;
+      width: 100%;
+      max-width: 680px;
+    }
+
+    /* Status badge */
+    #status-bar {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      font-size: 0.85rem;
+      margin-bottom: 1.5rem;
+      padding: 0.6rem 1rem;
+      border-radius: 8px;
+      background: #12121a;
+      border: 1px solid #2d2d40;
+      direction: ltr;
+    }
+
+    .dot {
+      width: 10px; height: 10px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .dot.loading { background: #f59e0b; animation: pulse 1.2s ease-in-out infinite; }
+    .dot.ready   { background: #22c55e; }
+    .dot.error   { background: #ef4444; }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50%       { opacity: 0.3; }
+    }
+
+    /* Drop zone */
+    #drop-zone {
+      border: 2px dashed #3d3d55;
+      border-radius: 12px;
+      padding: 2.5rem 1rem;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+      direction: ltr;
+    }
+    #drop-zone:hover, #drop-zone.dragover {
+      border-color: #7c3aed;
+      background: #1e1e2e;
+    }
+
+    #drop-zone svg { width: 48px; height: 48px; color: #4b5563; margin-bottom: 0.8rem; }
+    #drop-zone p   { color: #6b7280; font-size: 0.9rem; }
+    #drop-zone span { color: #7c3aed; font-weight: 600; cursor: pointer; }
+
+    #file-input { display: none; }
+
+    /* Preview */
+    #preview-wrap {
+      display: none;
+      margin-top: 1.2rem;
+      text-align: center;
+    }
+    #preview-img {
+      max-width: 100%;
+      max-height: 260px;
+      border-radius: 8px;
+      border: 1px solid #2d2d40;
+    }
+    #file-name {
+      font-size: 0.8rem;
+      color: #6b7280;
+      margin-top: 0.4rem;
+      direction: ltr;
+    }
+
+    /* Button */
+    #process-btn {
+      display: block;
+      width: 100%;
+      margin-top: 1.4rem;
+      padding: 0.85rem;
+      background: linear-gradient(135deg, #7c3aed, #2563eb);
+      color: #fff;
+      font-size: 1rem;
+      font-weight: 600;
+      border: none;
+      border-radius: 10px;
+      cursor: pointer;
+      transition: opacity 0.2s;
+      direction: ltr;
+    }
+    #process-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+    #process-btn:not(:disabled):hover { opacity: 0.88; }
+
+    /* Spinner */
+    .spinner-wrap {
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.8rem;
+      margin-top: 1.4rem;
+      direction: ltr;
+    }
+    .spinner {
+      width: 36px; height: 36px;
+      border: 3px solid #2d2d40;
+      border-top-color: #7c3aed;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Result */
+    #result-wrap { display: none; margin-top: 1.6rem; }
+
+    #result-label {
+      font-size: 0.8rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #6b7280;
+      margin-bottom: 0.5rem;
+    }
+
+    #result-text {
+      width: 100%;
+      min-height: 140px;
+      background: #12121a;
+      border: 1px solid #2d2d40;
+      border-radius: 10px;
+      padding: 1rem;
+      color: #e8e8f0;
+      font-size: 1.05rem;
+      line-height: 1.7;
+      resize: vertical;
+      font-family: inherit;
+      direction: rtl;
+      text-align: right;
+    }
+
+    .result-actions {
+      display: flex;
+      gap: 0.8rem;
+      margin-top: 0.8rem;
+      direction: ltr;
+    }
+    .result-actions button {
+      flex: 1;
+      padding: 0.65rem;
+      border-radius: 8px;
+      font-size: 0.88rem;
+      font-weight: 600;
+      cursor: pointer;
+      border: 1px solid #3d3d55;
+      transition: background 0.15s;
+    }
+    #copy-btn  { background: #1e1e2e; color: #a78bfa; }
+    #copy-btn:hover  { background: #27273a; }
+    #download-btn { background: #1e1e2e; color: #60a5fa; }
+    #download-btn:hover { background: #27273a; }
+
+    #error-msg {
+      display: none;
+      margin-top: 1rem;
+      padding: 0.75rem 1rem;
+      background: #1f0f0f;
+      border: 1px solid #7f1d1d;
+      border-radius: 8px;
+      color: #fca5a5;
+      font-size: 0.88rem;
+      direction: ltr;
+    }
+
+    /* Copy toast */
+    #copy-toast {
+      position: fixed;
+      bottom: 2rem;
+      left: 50%;
+      transform: translateX(-50%) translateY(20px);
+      background: #22c55e;
+      color: #fff;
+      padding: 0.5rem 1.2rem;
+      border-radius: 999px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      opacity: 0;
+      transition: opacity 0.25s, transform 0.25s;
+      pointer-events: none;
+    }
+    #copy-toast.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+  </style>
+</head>
+<body>
+  <h1>Arabic OCR</h1>
+  <p class="subtitle">Upload a handwritten or printed Arabic image to extract text</p>
+
+  <div class="card">
+    <div id="status-bar">
+      <div class="dot loading" id="status-dot"></div>
+      <span id="status-text">Loading model, please wait…</span>
+    </div>
+
+    <div id="drop-zone">
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+          d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/>
+      </svg>
+      <p>Drag &amp; drop an image here, or <span id="browse-link">browse</span></p>
+      <p style="font-size:0.78rem;margin-top:0.3rem;">PNG, JPG, TIFF, WEBP, BMP — max 32 MB</p>
+      <input type="file" id="file-input" accept=".png,.jpg,.jpeg,.tif,.tiff,.webp,.bmp" />
+    </div>
+
+    <div id="preview-wrap">
+      <img id="preview-img" alt="Preview" />
+      <p id="file-name"></p>
+    </div>
+
+    <button id="process-btn" disabled>Extract Arabic Text</button>
+
+    <div class="spinner-wrap" id="spinner-wrap">
+      <div class="spinner"></div>
+      <span style="color:#6b7280;font-size:0.88rem;">Processing image…</span>
+    </div>
+
+    <div id="error-msg"></div>
+
+    <div id="result-wrap">
+      <p id="result-label">Extracted Text</p>
+      <textarea id="result-text" readonly></textarea>
+      <div class="result-actions">
+        <button id="copy-btn">Copy Text</button>
+        <button id="download-btn">Download .txt</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="copy-toast">Copied!</div>
+
+  <script>
+    const dropZone    = document.getElementById('drop-zone');
+    const fileInput   = document.getElementById('file-input');
+    const browseLink  = document.getElementById('browse-link');
+    const previewWrap = document.getElementById('preview-wrap');
+    const previewImg  = document.getElementById('preview-img');
+    const fileNameEl  = document.getElementById('file-name');
+    const processBtn  = document.getElementById('process-btn');
+    const spinnerWrap = document.getElementById('spinner-wrap');
+    const errorMsg    = document.getElementById('error-msg');
+    const resultWrap  = document.getElementById('result-wrap');
+    const resultText  = document.getElementById('result-text');
+    const copyBtn     = document.getElementById('copy-btn');
+    const downloadBtn = document.getElementById('download-btn');
+    const statusDot   = document.getElementById('status-dot');
+    const statusText  = document.getElementById('status-text');
+    const copyToast   = document.getElementById('copy-toast');
+
+    let selectedFile = null;
+    let modelReady   = false;
+
+    // ── Model status polling ─────────────────────────────────────────────────
+    function pollStatus() {
+      fetch('/status')
+        .then(r => r.json())
+        .then(data => {
+          if (data.status === 'ready') {
+            statusDot.className = 'dot ready';
+            statusText.textContent = 'Model ready';
+            modelReady = true;
+            updateProcessBtn();
+          } else if (data.status === 'error') {
+            statusDot.className = 'dot error';
+            statusText.textContent = 'Model error: ' + data.message;
+          } else {
+            setTimeout(pollStatus, 3000);
+          }
+        })
+        .catch(() => setTimeout(pollStatus, 5000));
+    }
+    pollStatus();
+
+    function updateProcessBtn() {
+      processBtn.disabled = !(modelReady && selectedFile);
+    }
+
+    // ── File selection ───────────────────────────────────────────────────────
+    browseLink.addEventListener('click', () => fileInput.click());
+    dropZone.addEventListener('click', e => { if (e.target !== browseLink) fileInput.click(); });
+
+    fileInput.addEventListener('change', () => {
+      if (fileInput.files[0]) setFile(fileInput.files[0]);
+    });
+
+    dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+    dropZone.addEventListener('drop', e => {
+      e.preventDefault();
+      dropZone.classList.remove('dragover');
+      const f = e.dataTransfer.files[0];
+      if (f) setFile(f);
+    });
+
+    function setFile(file) {
+      selectedFile = file;
+      fileNameEl.textContent = file.name + ' (' + (file.size / 1024).toFixed(1) + ' KB)';
+      const url = URL.createObjectURL(file);
+      previewImg.src = url;
+      previewWrap.style.display = 'block';
+      hideResult();
+      updateProcessBtn();
+    }
+
+    // ── Process ──────────────────────────────────────────────────────────────
+    processBtn.addEventListener('click', async () => {
+      if (!selectedFile || !modelReady) return;
+
+      processBtn.disabled = true;
+      spinnerWrap.style.display = 'flex';
+      hideResult();
+
+      const fd = new FormData();
+      fd.append('image', selectedFile);
+
+      try {
+        const res = await fetch('/process', { method: 'POST', body: fd });
+        const data = await res.json();
+
+        if (!res.ok || data.error) {
+          showError(data.error || 'Unknown error occurred.');
+        } else {
+          showResult(data.text);
+        }
+      } catch (err) {
+        showError('Network error: ' + err.message);
+      } finally {
+        spinnerWrap.style.display = 'none';
+        processBtn.disabled = false;
+      }
+    });
+
+    function showResult(text) {
+      resultText.value = text;
+      resultWrap.style.display = 'block';
+      errorMsg.style.display = 'none';
+    }
+
+    function showError(msg) {
+      errorMsg.textContent = msg;
+      errorMsg.style.display = 'block';
+    }
+
+    function hideResult() {
+      resultWrap.style.display = 'none';
+      errorMsg.style.display = 'none';
+    }
+
+    // ── Copy ─────────────────────────────────────────────────────────────────
+    copyBtn.addEventListener('click', () => {
+      navigator.clipboard.writeText(resultText.value).then(() => {
+        copyToast.classList.add('show');
+        setTimeout(() => copyToast.classList.remove('show'), 1800);
+      });
+    });
+
+    // ── Download ─────────────────────────────────────────────────────────────
+    downloadBtn.addEventListener('click', () => {
+      const fd = new FormData();
+      fd.append('text', resultText.value);
+      fetch('/download', { method: 'POST', body: fd })
+        .then(r => r.blob())
+        .then(blob => {
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = 'arabic_ocr_result.txt';
+          a.click();
+        });
+    });
+  </script>
+</body>
+</html>

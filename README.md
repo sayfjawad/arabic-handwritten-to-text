@@ -1,123 +1,168 @@
 # Arabic Handwritten OCR
 
-Dit project gebruikt het `Qwen2.5-VL` model (specifiek de `sherif1313/Arabic-English-handwritten-OCR-v3` fine-tune) om Optical Character Recognition (OCR) uit te voeren op handgeschreven Arabische tekst.
+A local OCR service for extracting text from Arabic handwritten (and printed) images. It uses the [`sherif1313/Arabic-English-handwritten-OCR-v3`](https://huggingface.co/sherif1313/Arabic-English-handwritten-OCR-v3) model, a Qwen2.5-VL fine-tune, and ships both a Flask web UI and a CLI batch processor.
 
-## Kenmerken
-- Geoptimaliseerd voor Arabische handgeschreven tekst.
-- Ondersteunt zowel lokale installatie als VS Code Dev Containers.
-- GPU-versnelling ondersteuning via CUDA 12.1.
-- Automatische voorbewerking van afbeeldingen.
+## Requirements
 
----
+- Python 3.10+
+- NVIDIA GPU with CUDA 12.1 and drivers installed on the host (the model is ~7B parameters; CPU inference is impractically slow)
+- ~16 GB VRAM recommended (tested on RTX 3090 / 4090 class hardware)
+- Docker + NVIDIA Container Toolkit (only if using the Dev Container setup)
 
-## Vereisten
+## Installation
 
-Voordat je begint, zorg ervoor dat je machine aan de volgende eisen voldoet:
+### Option 1: Local setup (Linux/Ubuntu)
 
-- **NVIDIA GPU**: Sterk aanbevolen (minimaal 8GB VRAM). Het model kan op de CPU draaien, maar dit zal extreem traag zijn.
-- **NVIDIA Drivers**: Geïnstalleerd op de host-machine.
-- **Python 3.10+**: (Indien lokaal uitgevoerd).
-- **Docker & NVIDIA Container Toolkit**: (Indien Dev Containers worden gebruikt).
+Run the included setup script from inside the project directory. It creates a `.venv`, installs the CUDA 12.1 PyTorch wheel, and all Python dependencies:
 
----
+```bash
+bash setup_arabic_ocr_env.sh
+```
 
-## Installatie-instructies (A tot Z)
+To target a different directory:
 
-### Optie 1: Lokale Setup (Linux/Ubuntu) - Met `uv` (aanbevolen)
+```bash
+bash setup_arabic_ocr_env.sh /path/to/arabic-ocr
+```
 
-1. **Clone de repository**:
-   ```bash
-   git clone https://github.com/your-repo/arabic-handwritten-to-text.git
-   cd arabic-handwritten-to-text
-   ```
+The script ends with an environment check that prints PyTorch version, OpenCV version, and whether CUDA was detected.
 
-2. **Voer het setup-script uit**:
-   Dit script installeert `uv` (als dit nog niet geïnstalleerd is), maakt een virtuele omgeving aan en installeert alle afhankelijkheden (PyTorch met CUDA 12.1 ondersteuning, Transformers, etc.) in seconden.
-   ```bash
-   chmod +x setup_arabic_ocr_env.sh
-   ./setup_arabic_ocr_env.sh
-   ```
+#### Manual install
 
-3. **Activeer de omgeving**:
-   ```bash
-   source .venv/bin/activate
-   ```
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
 
-**Voordelen van `uv`:**
-- ⚡ 10-100x sneller dan pip/conda
-- 🔧 Geen conda problemen (geen "RootModel" fouten meer)
-- 📦 Automatische Python versie management
-- 🛡️ Betrouwbare dependency resolution
+`requirements.txt` includes the CUDA 12.1 index URL so PyTorch is fetched with GPU support automatically.
 
-### Optie 2: Dev Container Setup (Aanbevolen voor VS Code gebruikers)
+### Option 2: VS Code Dev Container
 
-Als je VS Code en Docker hebt geïnstalleerd:
+1. Open the project folder in VS Code.
+2. When prompted, click **Reopen in Container** (or press `F1` → `Dev Containers: Reopen in Container`).
+3. The container builds automatically and installs all dependencies. The first build downloads the PyTorch GPU base image which may take a few minutes.
 
-1. Open de projectmap in VS Code.
-2. Wanneer gevraagd wordt om "Reopen in Container", klik op **Reopen in Container**.
-   - Alternatief: druk op `F1`, typ `Dev Containers: Reopen in Container`.
-3. De container zal automatisch bouwen en alle afhankelijkheden installeren. Dit kan enkele minuten duren omdat het PyTorch GPU image wordt gedownload.
+The Dev Container `requirements.txt` omits the PyTorch packages because they are already present in the `pytorch/pytorch` base image.
 
-### Belangrijk: De venv activeren
-Voordat je een script uitvoert (`preprocess_images.py` of `ocr_arabic.py`), moet je **altijd** de virtuele omgeving activeren:
+## Running the web app
+
 ```bash
 source .venv/bin/activate
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+python app.py
 ```
-Als je dit vergeet, krijg je foutmeldingen zoals `ModuleNotFoundError: No module named 'cv2'`.
 
-## Gebruik
+The server starts on `http://0.0.0.0:5000`. The model loads in the background — the UI shows a pulsing amber dot while loading and a green dot once ready (typically 30–90 seconds on first run; subsequent runs are faster after the model is cached by HuggingFace).
 
-### 1. Afbeeldingen Voorbereiden
-Plaats je handgeschreven Arabische afbeeldingen in de `images/` map. Ondersteunde formaten: `.jpg`, `.png`, `.jpeg`, `.bmp`, `.webp`, `.tif`.
+### Web UI features
 
-### 2. Voorbewerking (Optioneel maar aanbevolen)
-Voer het voorbewerkingsscript uit om de kwaliteit van de afbeeldingen te verbeteren voor betere OCR-resultaten:
+- Drag-and-drop or browse to upload an image
+- Live image preview before processing
+- RTL Arabic text output area
+- One-click copy to clipboard
+- Download result as `.txt`
+
+### Supported formats
+
+PNG, JPG/JPEG, TIFF, WEBP, BMP — up to 32 MB.
+
+### API endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/` | Web UI |
+| GET | `/status` | Model loading state (`loading` / `ready` / `error`) |
+| POST | `/process` | Run OCR. Multipart form field: `image` (file). Returns `{"text": "..."}` |
+| POST | `/download` | Download text as `.txt`. Form field: `text` (string) |
+
+Example curl call:
+
 ```bash
-python preprocess_images.py
+curl -X POST http://localhost:5000/process \
+  -F "image=@my_image.jpg" | jq .text
 ```
-Dit slaat de bewerkte afbeeldingen op in de `processed_images/` map.
 
-### 3. OCR Uitvoeren
-Om de tekstextractie te starten:
+## Running the CLI batch processor
+
+Place input images in the `images/` directory, then optionally pre-process them:
+
 ```bash
-# Zorg dat je omgeving geactiveerd is
-python ocr_arabic.py
+source .venv/bin/activate
+
+# Optional — resize, denoise and enhance contrast before OCR
+python preprocess_images.py          # reads images/, writes processed_images/
+
+# Run OCR
+python ocr_arabic.py                 # reads processed_images/, writes output.txt
 ```
 
-Het script zal:
-- Het model laden van Hugging Face (de eerste keer wordt ~10GB aan gewichten gedownload).
-- Alle afbeeldingen in de `processed_images/` map verwerken.
-- De resultaten opslaan in `output.txt`.
+`ocr_arabic.py` defaults to `processed_images/` as its input directory. To use raw images directly, change `IMAGE_DIR = "images"` at the top of the file.
 
----
+Results are written to `output.txt` with one section per image.
 
-## Probleemoplossing
+## Image preprocessing
 
-### CUDA/GPU Problemen
-- **"CUDA is not available"**: Controleer of de NVIDIA-drivers en CUDA-toolkit correct zijn geïnstalleerd. Als je Docker gebruikt, zorg dan dat de `nvidia-container-toolkit` op je host is geïnstalleerd.
-- **Out of Memory (OOM)**: Het model is groot. Het script gebruikt `expandable_segments:True` om te helpen, maar als je nog steeds OOM-fouten krijgt, sluit dan andere GPU-intensieve applicaties.
-  ```bash
-  export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-  python ocr_arabic.py
-  ```
+Both `app.py` and `preprocess_images.py` apply the same pipeline before feeding images to the model:
 
-### `uv` Installatieproblemen
-- **"uv command not found"**: Na het installeren moet je je shell herstarten of dit uitvoeren:
-  ```bash
-  source $HOME/.cargo/env
-  ```
-- **Wil terug naar pip?**: Je kunt handmatig pip gebruiken:
-  ```bash
-  source .venv/bin/activate
-  pip install -e .
-  ```
+1. Resize so the longest side is at most 1000 px (keeps visual token count manageable)
+2. Convert to grayscale
+3. NLM denoising (`h=5`)
+4. CLAHE contrast enhancement (`clipLimit=1.5`, `tileGridSize=8×8`)
 
----
+## Running as a systemd service
 
-## Projectstructuur
-- `ocr_arabic.py`: Hoofdscript voor OCR-uitvoering.
-- `setup_arabic_ocr_env.sh`: Geautomatiseerde omgevingssetup.
-- `preprocess_images.py`: Script voor beeldverbetering.
-- `images/`: Plaats hier je invoerbestanden.
-- `processed_images/`: Waar verbeterde afbeeldingen worden opgeslagen.
-- `.devcontainer/`: Configuratie voor Docker-gebaseerde ontwikkeling.
+Copy the unit file and enable it:
+
+```bash
+sudo cp arabic-ocr.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now arabic-ocr
+```
+
+The service runs as the `hermes` user, uses the `.venv` Python interpreter, and restarts automatically on failure. Logs go to the system journal:
+
+```bash
+journalctl -u arabic-ocr -f
+```
+
+To stop or restart:
+
+```bash
+sudo systemctl stop arabic-ocr
+sudo systemctl restart arabic-ocr
+```
+
+## Troubleshooting
+
+**CUDA not available**: Verify NVIDIA drivers and CUDA toolkit are installed. In Docker, ensure `nvidia-container-toolkit` is installed on the host.
+
+**Out of memory (OOM)**: The model is large. Set the allocator environment variable and close other GPU-intensive applications:
+
+```bash
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+```
+
+## Project structure
+
+```
+arabic-ocr/
+├── app.py                  # Flask web app + background model loader
+├── ocr_arabic.py           # CLI batch processor
+├── preprocess_images.py    # Standalone image preprocessing script
+├── requirements.txt        # Python dependencies (CUDA 12.1 PyTorch)
+├── setup_arabic_ocr_env.sh # One-shot environment setup script
+├── arabic-ocr.service      # systemd unit file
+├── templates/
+│   └── index.html          # Web UI (RTL, dark theme)
+├── images/                 # Drop raw input images here (not tracked)
+└── processed_images/       # Output of preprocess_images.py (not tracked)
+```
+
+## Model notes
+
+The model checkpoint (`sherif1313/Arabic-English-handwritten-OCR-v3`) is missing `lm_head.weight` in its saved state. Both `app.py` and `ocr_arabic.py` work around this by tying the output embedding weights to the input embedding matrix after loading — this is intentional and safe for this checkpoint.
+
+The prompt sent to the model instructs it to extract only the written text without translation or explanation:
+
+> اقرأ النص العربي الموجود في الصورة واستخرج النص فقط. لا تشرح. لا تترجم. لا تضف أي شيء غير النص المكتوب.

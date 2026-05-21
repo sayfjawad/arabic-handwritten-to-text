@@ -1,7 +1,13 @@
 .venv/
 __pycache__/
 *.pyc
+*.pyo
 .cache/
-output.txt
+uploads/
+server.log
+images/
 processed_images/
+output.txt
+*.egg-info/
 /.idea/
+.DS_Store

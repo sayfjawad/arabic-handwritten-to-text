@@ -1,0 +1,17 @@
+[Unit]
+Description=Arabic OCR Flask Application
+After=network.target
+
+[Service]
+Type=simple
+User=hermes
+WorkingDirectory=/home/hermes/arabic-ocr
+ExecStart=/home/hermes/arabic-ocr/.venv/bin/python app.py
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
