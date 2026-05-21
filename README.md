@@ -5,9 +5,27 @@ A local OCR service for extracting text from Arabic handwritten (and printed) im
 ## Requirements
 
 - Python 3.10+
-- NVIDIA GPU with CUDA 12.1 and drivers installed on the host (the model is ~7B parameters; CPU inference is impractically slow)
-- ~16 GB VRAM recommended (tested on RTX 3090 / 4090 class hardware)
+- NVIDIA GPU with CUDA 12.1 and drivers installed on the host — CPU inference is impractically slow
+- **24 GB VRAM minimum (safe floor)** — see the VRAM breakdown below
 - Docker + NVIDIA Container Toolkit (only if using the Dev Container setup)
+
+### VRAM requirements
+
+The model (`sherif1313/Arabic-English-handwritten-OCR-v3`) is a Qwen2.5-VL fine-tune with roughly **8.3 B total parameters** (language model + vision encoder). It is loaded in **float16** with no quantization.
+
+| Budget item | Approximate size |
+|---|---|
+| Model weights (float16) | ~16.6 GB |
+| KV cache (GQA, typical sequence) | ~0.2 GB |
+| Activations + CUDA overhead | ~1.5–2 GB |
+| **Total at inference** | **~18–20 GB** |
+
+What this means in practice:
+
+- **< 16 GB — will not load.** The weights alone exceed 16 GB, so an 8 GB or 16 GB card cannot fit the model at all.
+- **16–20 GB — likely OOM.** The model fits in theory only if nothing else shares the GPU, and even then activations during a forward pass can push usage over the edge.
+- **24 GB — safe minimum.** Leaves ~4–6 GB headroom for activations and the OS/CUDA context. Cards in this tier: RTX 3090 / 3090 Ti, RTX 4090, RTX 6000 Ada, A5000, L4 24 GB.
+- **32 GB+ — comfortable.** Tested configuration (V100 32 GB). Other options: A100 40 GB, A100 80 GB, H100.
 
 ## Installation
 
