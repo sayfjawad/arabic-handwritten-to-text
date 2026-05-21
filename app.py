@@ -1,17 +1,36 @@
 import os
 import io
 import uuid
+import secrets
 import threading
 import cv2
 import numpy as np
 import torch
-from flask import Flask, request, jsonify, render_template, send_file
+from flask import Flask, request, jsonify, render_template, send_file, session
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+from captcha.image import ImageCaptcha
 from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
 from qwen_vl_utils import process_vision_info
 from PIL import Image
 
 app = Flask(__name__)
+app.secret_key = secrets.token_hex(32)
 app.config["MAX_CONTENT_LENGTH"] = 32 * 1024 * 1024  # 32 MB upload limit
+
+limiter = Limiter(
+    get_remote_address,
+    app=app,
+    default_limits=[],
+    storage_uri="memory://",
+)
+
+_image_captcha = ImageCaptcha(width=220, height=72)
+_CAPTCHA_CHARS = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+
+
+def _gen_captcha_text(length: int = 5) -> str:
+    return "".join(secrets.choice(_CAPTCHA_CHARS) for _ in range(length))
 
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -143,6 +162,16 @@ def index():
     return render_template("index.html")
 
 
+@app.route("/captcha")
+def captcha():
+    text = _gen_captcha_text()
+    session["captcha"] = text
+    img_data = _image_captcha.generate(text)
+    response = send_file(img_data, mimetype="image/png")
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 @app.route("/status")
 def status():
     with model_lock:
@@ -154,7 +183,13 @@ def status():
 
 
 @app.route("/process", methods=["POST"])
+@limiter.limit("20 per minute")
 def process():
+    user_answer = request.form.get("captcha", "").strip().upper()
+    expected = session.pop("captcha", None)
+    if not expected or user_answer != expected:
+        return jsonify({"error": "Invalid CAPTCHA. Please try again.", "captcha_error": True}), 400
+
     with model_lock:
         if model_error:
             return jsonify({"error": f"Model failed to load: {model_error}"}), 500
@@ -200,8 +235,9 @@ def download():
     )
 
 
+model_loading = True
+_t = threading.Thread(target=load_model_background, daemon=True)
+_t.start()
+
 if __name__ == "__main__":
-    model_loading = True
-    t = threading.Thread(target=load_model_background, daemon=True)
-    t.start()
     app.run(host="0.0.0.0", port=5000, debug=False)

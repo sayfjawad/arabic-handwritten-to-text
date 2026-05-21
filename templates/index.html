@@ -211,6 +211,56 @@
       direction: ltr;
     }
 
+    /* CAPTCHA */
+    #captcha-wrap {
+      margin-top: 1.4rem;
+      direction: ltr;
+    }
+    #captcha-label {
+      font-size: 0.8rem;
+      color: #6b7280;
+      margin-bottom: 0.6rem;
+    }
+    .captcha-row {
+      display: flex;
+      align-items: center;
+      gap: 0.8rem;
+      margin-bottom: 0.7rem;
+    }
+    #captcha-img {
+      border-radius: 8px;
+      border: 1px solid #2d2d40;
+      height: 72px;
+      display: block;
+    }
+    #refresh-captcha {
+      background: #1e1e2e;
+      border: 1px solid #3d3d55;
+      color: #a78bfa;
+      border-radius: 8px;
+      padding: 0.5rem 0.75rem;
+      font-size: 1.1rem;
+      cursor: pointer;
+      transition: background 0.15s;
+      line-height: 1;
+    }
+    #refresh-captcha:hover { background: #27273a; }
+    #captcha-input {
+      width: 100%;
+      padding: 0.65rem 0.9rem;
+      background: #12121a;
+      border: 1px solid #2d2d40;
+      border-radius: 8px;
+      color: #e8e8f0;
+      font-size: 1rem;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    #captcha-input:focus { border-color: #7c3aed; }
+    #captcha-input::placeholder { letter-spacing: normal; text-transform: none; color: #4b5563; }
+
     /* Copy toast */
     #copy-toast {
       position: fixed;
@@ -258,6 +308,15 @@
       <p id="file-name"></p>
     </div>
 
+    <div id="captcha-wrap">
+      <p id="captcha-label">Verify you're human — type the characters shown below</p>
+      <div class="captcha-row">
+        <img id="captcha-img" src="/captcha" alt="CAPTCHA challenge" />
+        <button type="button" id="refresh-captcha" title="New challenge">&#8635;</button>
+      </div>
+      <input type="text" id="captcha-input" maxlength="5" autocomplete="off" spellcheck="false" placeholder="Type 5 characters" />
+    </div>
+
     <button id="process-btn" disabled>Extract Arabic Text</button>
 
     <div class="spinner-wrap" id="spinner-wrap">
@@ -280,25 +339,37 @@
   <div id="copy-toast">Copied!</div>
 
   <script>
-    const dropZone    = document.getElementById('drop-zone');
-    const fileInput   = document.getElementById('file-input');
-    const browseLink  = document.getElementById('browse-link');
-    const previewWrap = document.getElementById('preview-wrap');
-    const previewImg  = document.getElementById('preview-img');
-    const fileNameEl  = document.getElementById('file-name');
-    const processBtn  = document.getElementById('process-btn');
-    const spinnerWrap = document.getElementById('spinner-wrap');
-    const errorMsg    = document.getElementById('error-msg');
-    const resultWrap  = document.getElementById('result-wrap');
-    const resultText  = document.getElementById('result-text');
-    const copyBtn     = document.getElementById('copy-btn');
-    const downloadBtn = document.getElementById('download-btn');
-    const statusDot   = document.getElementById('status-dot');
-    const statusText  = document.getElementById('status-text');
-    const copyToast   = document.getElementById('copy-toast');
+    const dropZone      = document.getElementById('drop-zone');
+    const fileInput     = document.getElementById('file-input');
+    const browseLink    = document.getElementById('browse-link');
+    const previewWrap   = document.getElementById('preview-wrap');
+    const previewImg    = document.getElementById('preview-img');
+    const fileNameEl    = document.getElementById('file-name');
+    const processBtn    = document.getElementById('process-btn');
+    const spinnerWrap   = document.getElementById('spinner-wrap');
+    const errorMsg      = document.getElementById('error-msg');
+    const resultWrap    = document.getElementById('result-wrap');
+    const resultText    = document.getElementById('result-text');
+    const copyBtn       = document.getElementById('copy-btn');
+    const downloadBtn   = document.getElementById('download-btn');
+    const statusDot     = document.getElementById('status-dot');
+    const statusText    = document.getElementById('status-text');
+    const copyToast     = document.getElementById('copy-toast');
+    const captchaImg    = document.getElementById('captcha-img');
+    const captchaInput  = document.getElementById('captcha-input');
+    const refreshBtn    = document.getElementById('refresh-captcha');
 
     let selectedFile = null;
     let modelReady   = false;
+
+    function refreshCaptcha() {
+      captchaInput.value = '';
+      captchaImg.src = '/captcha?' + Date.now();
+      updateProcessBtn();
+    }
+
+    refreshBtn.addEventListener('click', refreshCaptcha);
+    captchaInput.addEventListener('input', updateProcessBtn);
 
     // ── Model status polling ─────────────────────────────────────────────────
     function pollStatus() {
@@ -322,7 +393,7 @@
     pollStatus();
 
     function updateProcessBtn() {
-      processBtn.disabled = !(modelReady && selectedFile);
+      processBtn.disabled = !(modelReady && selectedFile && captchaInput.value.trim().length === 5);
     }
 
     // ── File selection ───────────────────────────────────────────────────────
@@ -362,6 +433,7 @@
 
       const fd = new FormData();
       fd.append('image', selectedFile);
+      fd.append('captcha', captchaInput.value.trim().toUpperCase());
 
       try {
         const res = await fetch('/process', { method: 'POST', body: fd });
@@ -369,14 +441,16 @@
 
         if (!res.ok || data.error) {
           showError(data.error || 'Unknown error occurred.');
+          if (data.captcha_error) refreshCaptcha();
         } else {
           showResult(data.text);
+          refreshCaptcha();
         }
       } catch (err) {
         showError('Network error: ' + err.message);
       } finally {
         spinnerWrap.style.display = 'none';
-        processBtn.disabled = false;
+        updateProcessBtn();
       }
     });
 
