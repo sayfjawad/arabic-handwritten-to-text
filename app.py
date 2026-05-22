@@ -1,18 +1,23 @@
-import os
 import io
-import uuid
+import json
+import os
 import secrets
 import threading
+import time
+import traceback
+import uuid
+from datetime import datetime, timezone
+
 import cv2
 import numpy as np
 import torch
+from captcha.image import ImageCaptcha
 from flask import Flask, request, jsonify, render_template, send_file, session
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
-from captcha.image import ImageCaptcha
-from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
-from qwen_vl_utils import process_vision_info
 from PIL import Image
+from qwen_vl_utils import process_vision_info
+from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
 
 app = Flask(__name__)
 app.secret_key = secrets.token_hex(32)
@@ -32,8 +37,11 @@ _CAPTCHA_CHARS = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 def _gen_captcha_text(length: int = 5) -> str:
     return "".join(secrets.choice(_CAPTCHA_CHARS) for _ in range(length))
 
+
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
+ARCHIVE_DIR = os.path.join(os.path.dirname(__file__), "archive")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+os.makedirs(ARCHIVE_DIR, exist_ok=True)
 
 ALLOWED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".webp", ".bmp"}
 MODEL_NAME = "sherif1313/Arabic-English-handwritten-OCR-v3"
@@ -79,12 +87,14 @@ def load_model_background():
         model_loading = False
 
 
-def preprocess_image(img_bytes: bytes) -> np.ndarray:
-    """Resize, denoise and enhance contrast — mirrors preprocess_images.py."""
+def preprocess_image(img_bytes: bytes) -> tuple[np.ndarray, tuple[int, int]]:
+    """Returns (processed_array, (original_h, original_w))."""
     nparr = np.frombuffer(img_bytes, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     if img is None:
         raise ValueError("Could not decode image")
+
+    orig_h, orig_w = img.shape[:2]
 
     MAX_SIDE = 1000
     h, w = img.shape[:2]
@@ -96,10 +106,11 @@ def preprocess_image(img_bytes: bytes) -> np.ndarray:
     gray = cv2.fastNlMeansDenoising(gray, None, h=5)
     clahe = cv2.createCLAHE(clipLimit=1.5, tileGridSize=(8, 8))
     gray = clahe.apply(gray)
-    return gray
+    return gray, (orig_h, orig_w)
 
 
-def run_ocr(processed: np.ndarray) -> str:
+def run_ocr(processed: np.ndarray) -> tuple[str, int]:
+    """Returns (extracted_text, tokens_generated)."""
     pil_image = Image.fromarray(processed)
 
     # Save to a temp file because process_vision_info expects a file path or URL
@@ -146,15 +157,51 @@ def run_ocr(processed: np.ndarray) -> str:
             )
 
         input_len = inputs.input_ids.shape[1]
+        tokens_generated = int(generated_ids.shape[1] - input_len)
         result = processor.batch_decode(
             generated_ids[:, input_len:],
             skip_special_tokens=True,
             clean_up_tokenization_spaces=False,
         )[0]
-        return result.strip()
+        return result.strip(), tokens_generated
     finally:
         if os.path.exists(tmp_path):
             os.remove(tmp_path)
+
+
+def _write_archive(
+    job_id: str,
+    meta: dict,
+    input_bytes: bytes | None,
+    processed: np.ndarray | None,
+):
+    """Write job artifacts to disk in a background thread."""
+    try:
+        date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        job_dir = os.path.join(ARCHIVE_DIR, date_str, job_id)
+        os.makedirs(job_dir, exist_ok=True)
+
+        if input_bytes is not None:
+            ext = meta.get("file_ext", ".bin")
+            with open(os.path.join(job_dir, f"input{ext}"), "wb") as f:
+                f.write(input_bytes)
+
+        if processed is not None:
+            cv2.imwrite(os.path.join(job_dir, "processed.png"), processed)
+
+        with open(os.path.join(job_dir, "meta.json"), "w", encoding="utf-8") as f:
+            json.dump(meta, f, ensure_ascii=False, indent=2)
+    except Exception:
+        print(f"[archive] Failed to write job {job_id}:\n{traceback.format_exc()}")
+
+
+def _archive_async(job_id, meta, input_bytes, processed):
+    t = threading.Thread(
+        target=_write_archive,
+        args=(job_id, meta, input_bytes, processed),
+        daemon=True,
+    )
+    t.start()
 
 
 @app.route("/")
@@ -185,47 +232,125 @@ def status():
 @app.route("/process", methods=["POST"])
 @limiter.limit("20 per minute")
 def process():
+    job_id = uuid.uuid4().hex
+    t_start = time.monotonic()
+
+    meta = {
+        "job_id": job_id,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "model": MODEL_NAME,
+        "original_filename": None,
+        "file_size_bytes": None,
+        "file_ext": None,
+        "client_ip": get_remote_address(),
+        "status": "error",
+        "error_stage": None,
+        "error": None,
+        "result": None,
+        "tokens_generated": None,
+        "input_image_shape": None,
+        "processed_image_shape": None,
+        "duration_preprocess_ms": None,
+        "duration_ocr_ms": None,
+        "duration_total_ms": None,
+    }
+    input_bytes = None
+    processed = None
+
+    # --- CAPTCHA check ---
     user_answer = request.form.get("captcha", "").strip().upper()
     expected = session.pop("captcha", None)
     if not expected or user_answer != expected:
+        meta["error_stage"] = "captcha"
+        meta["error"] = "Invalid CAPTCHA"
+        meta["duration_total_ms"] = round((time.monotonic() - t_start) * 1000)
+        _archive_async(job_id, meta, input_bytes, processed)
         return jsonify({"error": "Invalid CAPTCHA. Please try again.", "captcha_error": True}), 400
 
+    # --- Model readiness check ---
     with model_lock:
         if model_error:
+            meta["error_stage"] = "model"
+            meta["error"] = model_error
+            meta["duration_total_ms"] = round((time.monotonic() - t_start) * 1000)
+            _archive_async(job_id, meta, input_bytes, processed)
             return jsonify({"error": f"Model failed to load: {model_error}"}), 500
         if model is None:
+            meta["error_stage"] = "model"
+            meta["error"] = "Model not yet loaded"
+            meta["duration_total_ms"] = round((time.monotonic() - t_start) * 1000)
+            _archive_async(job_id, meta, input_bytes, processed)
             return jsonify({"error": "Model is still loading, please wait."}), 503
 
+    # --- File validation ---
     if "image" not in request.files:
+        meta["error_stage"] = "validation"
+        meta["error"] = "No image file provided"
+        meta["duration_total_ms"] = round((time.monotonic() - t_start) * 1000)
+        _archive_async(job_id, meta, input_bytes, processed)
         return jsonify({"error": "No image file provided."}), 400
 
     file = request.files["image"]
     if not file.filename:
+        meta["error_stage"] = "validation"
+        meta["error"] = "No file selected"
+        meta["duration_total_ms"] = round((time.monotonic() - t_start) * 1000)
+        _archive_async(job_id, meta, input_bytes, processed)
         return jsonify({"error": "No file selected."}), 400
 
     ext = os.path.splitext(file.filename)[1].lower()
     if ext not in ALLOWED_EXTENSIONS:
+        meta["error_stage"] = "validation"
+        meta["error"] = f"Unsupported file type: {ext}"
+        meta["duration_total_ms"] = round((time.monotonic() - t_start) * 1000)
+        _archive_async(job_id, meta, input_bytes, processed)
         return jsonify({"error": f"Unsupported file type: {ext}"}), 400
 
-    img_bytes = file.read()
+    input_bytes = file.read()
+    meta["original_filename"] = file.filename
+    meta["file_size_bytes"] = len(input_bytes)
+    meta["file_ext"] = ext
 
+    # --- Preprocessing ---
+    t_pre = time.monotonic()
     try:
-        processed = preprocess_image(img_bytes)
+        processed, orig_shape = preprocess_image(input_bytes)
+        meta["duration_preprocess_ms"] = round((time.monotonic() - t_pre) * 1000)
+        meta["input_image_shape"] = list(orig_shape)
+        meta["processed_image_shape"] = list(processed.shape[:2])
     except Exception as e:
+        meta["error_stage"] = "preprocessing"
+        meta["error"] = str(e)
+        meta["duration_preprocess_ms"] = round((time.monotonic() - t_pre) * 1000)
+        meta["duration_total_ms"] = round((time.monotonic() - t_start) * 1000)
+        _archive_async(job_id, meta, input_bytes, processed)
         return jsonify({"error": f"Image preprocessing failed: {e}"}), 422
 
+    # --- OCR ---
+    t_ocr = time.monotonic()
     try:
-        text = run_ocr(processed)
+        text, tokens_generated = run_ocr(processed)
+        meta["duration_ocr_ms"] = round((time.monotonic() - t_ocr) * 1000)
+        meta["result"] = text
+        meta["tokens_generated"] = tokens_generated
+        meta["status"] = "success"
     except Exception as e:
+        meta["error_stage"] = "ocr"
+        meta["error"] = str(e)
+        meta["duration_ocr_ms"] = round((time.monotonic() - t_ocr) * 1000)
+        meta["duration_total_ms"] = round((time.monotonic() - t_start) * 1000)
+        _archive_async(job_id, meta, input_bytes, processed)
         return jsonify({"error": f"OCR failed: {e}"}), 500
 
+    meta["duration_total_ms"] = round((time.monotonic() - t_start) * 1000)
+    _archive_async(job_id, meta, input_bytes, processed)
     return jsonify({"text": text})
 
 
 @app.route("/download", methods=["POST"])
 def download():
     text = request.form.get("text", "")
-    buf = io.BytesIO(text.encode("utf-8"))
+    buf = io.BytesIO(text.encode("utf-8-sig"))
     buf.seek(0)
     return send_file(
         buf,
