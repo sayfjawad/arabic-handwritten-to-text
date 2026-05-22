@@ -261,6 +261,45 @@
     #captcha-input:focus { border-color: #7c3aed; }
     #captcha-input::placeholder { letter-spacing: normal; text-transform: none; color: #4b5563; }
 
+    /* Feedback */
+    #feedback-section {
+      margin-top: 1rem;
+      padding-top: 1rem;
+      border-top: 1px solid #2d2d40;
+      direction: ltr;
+    }
+    #feedback-label {
+      font-size: 0.8rem;
+      color: #6b7280;
+      margin-bottom: 0.6rem;
+    }
+    #feedback-btns {
+      display: flex;
+      gap: 0.7rem;
+    }
+    .thumb-btn {
+      flex: 1;
+      padding: 0.6rem;
+      border-radius: 8px;
+      font-size: 0.88rem;
+      font-weight: 600;
+      cursor: pointer;
+      border: 1px solid #3d3d55;
+      background: #1e1e2e;
+      color: #9ca3af;
+      transition: background 0.15s, border-color 0.15s, color 0.15s;
+    }
+    .thumb-btn:hover:not(:disabled) { background: #27273a; }
+    .thumb-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+    .thumb-btn.active-up   { background: #052e16; border-color: #16a34a; color: #4ade80; }
+    .thumb-btn.active-down { background: #2d0f0f; border-color: #dc2626; color: #f87171; }
+    #feedback-done {
+      font-size: 0.85rem;
+      color: #4ade80;
+      margin-top: 0.5rem;
+      display: none;
+    }
+
     /* Copy toast */
     #copy-toast {
       position: fixed;
@@ -328,10 +367,18 @@
 
     <div id="result-wrap">
       <p id="result-label">Extracted Text</p>
-      <textarea id="result-text" readonly></textarea>
+      <textarea id="result-text"></textarea>
       <div class="result-actions">
         <button id="copy-btn">Copy Text</button>
         <button id="download-btn">Download .txt</button>
+      </div>
+      <div id="feedback-section">
+        <p id="feedback-label">Was this result accurate? You can edit the text above before rating.</p>
+        <div id="feedback-btns">
+          <button class="thumb-btn" id="thumb-up">👍 Looks correct</button>
+          <button class="thumb-btn" id="thumb-down">👎 Needs correction</button>
+        </div>
+        <p id="feedback-done">Feedback saved — thank you!</p>
       </div>
     </div>
   </div>
@@ -359,8 +406,9 @@
     const captchaInput  = document.getElementById('captcha-input');
     const refreshBtn    = document.getElementById('refresh-captcha');
 
-    let selectedFile = null;
-    let modelReady   = false;
+    let selectedFile  = null;
+    let modelReady    = false;
+    let currentJobId  = null;
 
     function refreshCaptcha() {
       captchaInput.value = '';
@@ -443,7 +491,7 @@
           showError(data.error || 'Unknown error occurred.');
           if (data.captcha_error) refreshCaptcha();
         } else {
-          showResult(data.text);
+          showResult(data.text, data.job_id);
           refreshCaptcha();
         }
       } catch (err) {
@@ -454,11 +502,42 @@
       }
     });
 
-    function showResult(text) {
+    const thumbUp      = document.getElementById('thumb-up');
+    const thumbDown    = document.getElementById('thumb-down');
+    const feedbackDone = document.getElementById('feedback-done');
+    const feedbackBtns = document.getElementById('feedback-btns');
+
+    function showResult(text, jobId) {
       resultText.value = text;
+      currentJobId = jobId || null;
       resultWrap.style.display = 'block';
       errorMsg.style.display = 'none';
+      // Reset feedback state
+      feedbackBtns.style.display = 'flex';
+      feedbackDone.style.display = 'none';
+      thumbUp.disabled = false;
+      thumbDown.disabled = false;
+      thumbUp.classList.remove('active-up', 'active-down');
+      thumbDown.classList.remove('active-up', 'active-down');
     }
+
+    async function submitFeedback(rating) {
+      if (!currentJobId) return;
+      thumbUp.disabled = true;
+      thumbDown.disabled = true;
+      if (rating === 'up') thumbUp.classList.add('active-up');
+      else thumbDown.classList.add('active-down');
+      const fd = new FormData();
+      fd.append('job_id', currentJobId);
+      fd.append('rating', rating);
+      fd.append('corrected_text', resultText.value);
+      try { await fetch('/feedback', { method: 'POST', body: fd }); } catch (_) {}
+      feedbackBtns.style.display = 'none';
+      feedbackDone.style.display = 'block';
+    }
+
+    thumbUp.addEventListener('click',   () => submitFeedback('up'));
+    thumbDown.addEventListener('click', () => submitFeedback('down'));
 
     function showError(msg) {
       errorMsg.textContent = msg;

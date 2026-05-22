@@ -204,6 +204,16 @@ def _archive_async(job_id, meta, input_bytes, processed):
     t.start()
 
 
+def _find_job_meta_path(job_id: str) -> str | None:
+    if not os.path.isdir(ARCHIVE_DIR):
+        return None
+    for date_dir in sorted(os.listdir(ARCHIVE_DIR), reverse=True)[:3]:
+        path = os.path.join(ARCHIVE_DIR, date_dir, job_id, "meta.json")
+        if os.path.exists(path):
+            return path
+    return None
+
+
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -344,7 +354,48 @@ def process():
 
     meta["duration_total_ms"] = round((time.monotonic() - t_start) * 1000)
     _archive_async(job_id, meta, input_bytes, processed)
-    return jsonify({"text": text})
+    return jsonify({"text": text, "job_id": job_id})
+
+
+@app.route("/feedback", methods=["POST"])
+@limiter.limit("30 per minute")
+def feedback():
+    job_id = request.form.get("job_id", "").strip()
+    rating = request.form.get("rating", "").strip()
+    corrected_text = request.form.get("corrected_text", "")
+
+    if not job_id:
+        return jsonify({"error": "Missing job_id"}), 400
+    if rating not in ("up", "down"):
+        return jsonify({"error": "Invalid rating"}), 400
+
+    meta_path = _find_job_meta_path(job_id)
+    if meta_path is None:
+        return jsonify({"error": "Job not found"}), 404
+
+    try:
+        with open(meta_path, "r", encoding="utf-8") as f:
+            meta = json.load(f)
+
+        predicted = meta.get("result", "")
+        is_correction = bool(corrected_text) and corrected_text != predicted
+
+        meta["feedback_rating"] = rating
+        meta["feedback_corrected_text"] = corrected_text if is_correction else None
+        meta["feedback_is_correction"] = is_correction
+        meta["feedback_timestamp"] = datetime.now(timezone.utc).isoformat()
+
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump(meta, f, ensure_ascii=False, indent=2)
+
+        if is_correction:
+            correction_path = os.path.join(os.path.dirname(meta_path), "corrected.txt")
+            with open(correction_path, "w", encoding="utf-8") as f:
+                f.write(corrected_text)
+
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/download", methods=["POST"])
