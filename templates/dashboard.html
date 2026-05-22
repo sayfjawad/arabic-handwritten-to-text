@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Arabic OCR — Training Readiness</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: #0f0f13;
+      color: #e8e8f0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 2rem 1rem 4rem;
+    }
+
+    a { color: #a78bfa; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    h1 {
+      font-size: 1.6rem;
+      font-weight: 700;
+      background: linear-gradient(135deg, #a78bfa, #60a5fa);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      margin-bottom: 0.3rem;
+    }
+    .subtitle {
+      color: #6b7280;
+      font-size: 0.88rem;
+      margin-bottom: 2rem;
+    }
+    .back-link {
+      font-size: 0.82rem;
+      color: #6b7280;
+      margin-bottom: 1.4rem;
+      align-self: flex-start;
+      max-width: 820px;
+      width: 100%;
+    }
+
+    .page { width: 100%; max-width: 820px; display: flex; flex-direction: column; gap: 1.4rem; }
+
+    /* Cards */
+    .card {
+      background: #1a1a24;
+      border: 1px solid #2d2d40;
+      border-radius: 16px;
+      padding: 1.6rem;
+    }
+    .card-title {
+      font-size: 0.75rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #6b7280;
+      margin-bottom: 1.2rem;
+    }
+
+    /* Stat grid */
+    .stat-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 1rem;
+    }
+    @media (max-width: 600px) { .stat-grid { grid-template-columns: repeat(2, 1fr); } }
+
+    .stat-box {
+      background: #12121a;
+      border: 1px solid #2d2d40;
+      border-radius: 12px;
+      padding: 1rem;
+      text-align: center;
+    }
+    .stat-value {
+      font-size: 2rem;
+      font-weight: 700;
+      line-height: 1.1;
+    }
+    .stat-label {
+      font-size: 0.75rem;
+      color: #6b7280;
+      margin-top: 0.3rem;
+    }
+    .stat-box.highlight .stat-value { color: #a78bfa; }
+    .stat-box.green   .stat-value   { color: #4ade80; }
+    .stat-box.blue    .stat-value   { color: #60a5fa; }
+    .stat-box.yellow  .stat-value   { color: #fbbf24; }
+
+    /* Progress */
+    .progress-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      margin-bottom: 0.6rem;
+    }
+    .progress-target { font-size: 0.82rem; color: #6b7280; }
+    .progress-count  { font-size: 1.1rem; font-weight: 700; color: #a78bfa; }
+
+    .progress-bar-bg {
+      background: #12121a;
+      border-radius: 999px;
+      height: 12px;
+      overflow: hidden;
+      margin-bottom: 1.2rem;
+    }
+    .progress-bar-fill {
+      height: 100%;
+      border-radius: 999px;
+      background: linear-gradient(90deg, #7c3aed, #2563eb);
+      transition: width 0.6s ease;
+    }
+
+    .milestones {
+      display: flex;
+      justify-content: space-between;
+      position: relative;
+      margin-top: 0.2rem;
+    }
+    .milestone {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.3rem;
+      font-size: 0.75rem;
+    }
+    .milestone-dot {
+      width: 18px; height: 18px;
+      border-radius: 50%;
+      border: 2px solid #3d3d55;
+      background: #12121a;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.6rem;
+    }
+    .milestone.reached .milestone-dot {
+      background: #4ade80;
+      border-color: #4ade80;
+      color: #052e16;
+      font-weight: 700;
+    }
+    .milestone.next .milestone-dot {
+      border-color: #7c3aed;
+      box-shadow: 0 0 0 3px rgba(124,58,237,0.25);
+    }
+    .milestone-label { color: #6b7280; }
+    .milestone.reached .milestone-label { color: #4ade80; }
+    .milestone.next    .milestone-label { color: #a78bfa; }
+
+    /* Quality breakdown */
+    .quality-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 0.8rem;
+    }
+    @media (max-width: 500px) { .quality-grid { grid-template-columns: 1fr; } }
+
+    .quality-box {
+      background: #12121a;
+      border: 1px solid #2d2d40;
+      border-radius: 10px;
+      padding: 0.9rem 1rem;
+    }
+    .quality-box .q-value { font-size: 1.5rem; font-weight: 700; }
+    .quality-box .q-label { font-size: 0.75rem; color: #6b7280; margin-top: 0.2rem; }
+    .quality-box.green  .q-value { color: #4ade80; }
+    .quality-box.purple .q-value { color: #a78bfa; }
+    .quality-box.gray   .q-value { color: #6b7280; }
+
+    /* Notify */
+    .notify-section { display: flex; flex-direction: column; gap: 0.9rem; }
+    .notify-desc { font-size: 0.88rem; color: #9ca3af; line-height: 1.6; }
+
+    #notify-btn {
+      padding: 0.85rem 1.8rem;
+      background: linear-gradient(135deg, #7c3aed, #2563eb);
+      color: #fff;
+      font-size: 0.95rem;
+      font-weight: 600;
+      border: none;
+      border-radius: 10px;
+      cursor: pointer;
+      transition: opacity 0.2s;
+      align-self: flex-start;
+    }
+    #notify-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    #notify-btn:not(:disabled):hover { opacity: 0.88; }
+
+    #notify-status { font-size: 0.85rem; }
+    #notify-status.ok   { color: #4ade80; }
+    #notify-status.err  { color: #f87171; }
+    #notify-status.cool { color: #fbbf24; }
+
+    .last-notification {
+      font-size: 0.8rem;
+      color: #6b7280;
+      background: #12121a;
+      border: 1px solid #2d2d40;
+      border-radius: 8px;
+      padding: 0.7rem 1rem;
+    }
+    .last-notification strong { color: #9ca3af; }
+
+    /* Fine-tuning guide */
+    .guide-toggle {
+      background: none;
+      border: 1px solid #3d3d55;
+      border-radius: 8px;
+      padding: 0.6rem 1rem;
+      color: #a78bfa;
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      width: 100%;
+      text-align: left;
+      justify-content: space-between;
+    }
+    .guide-toggle:hover { background: #1e1e2e; }
+    .guide-toggle .arrow { transition: transform 0.2s; }
+    .guide-toggle.open .arrow { transform: rotate(180deg); }
+
+    .guide-content {
+      display: none;
+      margin-top: 1rem;
+      padding-top: 1rem;
+      border-top: 1px solid #2d2d40;
+      font-size: 0.85rem;
+      line-height: 1.7;
+      color: #9ca3af;
+    }
+    .guide-content.visible { display: block; }
+
+    .guide-content h3 {
+      font-size: 0.82rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      color: #6b7280;
+      margin: 1.2rem 0 0.5rem;
+    }
+    .guide-content h3:first-child { margin-top: 0; }
+
+    .guide-content code, .guide-content pre {
+      font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+    }
+    .guide-content pre {
+      background: #0d0d14;
+      border: 1px solid #2d2d40;
+      border-radius: 8px;
+      padding: 0.9rem 1rem;
+      overflow-x: auto;
+      font-size: 0.8rem;
+      color: #c4c4f0;
+      margin: 0.4rem 0;
+      white-space: pre;
+    }
+    .guide-content .note {
+      background: #12121a;
+      border-left: 3px solid #7c3aed;
+      padding: 0.6rem 0.9rem;
+      border-radius: 0 6px 6px 0;
+      color: #9ca3af;
+      margin: 0.6rem 0;
+    }
+
+    /* Auto-refresh indicator */
+    .refresh-note {
+      font-size: 0.75rem;
+      color: #4b5563;
+      text-align: right;
+      margin-top: -0.6rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="back-link"><a href="/">← Back to OCR app</a></div>
+  <h1>Training Readiness Dashboard</h1>
+  <p class="subtitle">Track feedback collection progress toward the next fine-tuning run</p>
+
+  <div class="page">
+
+    <!-- Stats overview -->
+    <div class="card">
+      <p class="card-title">Overview</p>
+      <div class="stat-grid">
+        <div class="stat-box">
+          <div class="stat-value" id="total-jobs">—</div>
+          <div class="stat-label">Total Jobs</div>
+        </div>
+        <div class="stat-box blue">
+          <div class="stat-value" id="successful-jobs">—</div>
+          <div class="stat-label">Successful</div>
+        </div>
+        <div class="stat-box highlight">
+          <div class="stat-value" id="usable-pairs">—</div>
+          <div class="stat-label">Usable Training Pairs</div>
+        </div>
+        <div class="stat-box yellow">
+          <div class="stat-value" id="feedback-pct">—</div>
+          <div class="stat-label">Feedback Coverage</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Milestone progress -->
+    <div class="card">
+      <p class="card-title">Fine-Tuning Milestone Progress</p>
+      <div class="progress-header">
+        <span id="progress-label" class="progress-target">Loading…</span>
+        <span id="progress-count" class="progress-count"></span>
+      </div>
+      <div class="progress-bar-bg">
+        <div class="progress-bar-fill" id="progress-fill" style="width:0%"></div>
+      </div>
+      <div class="milestones" id="milestones-row"></div>
+    </div>
+
+    <!-- Quality breakdown -->
+    <div class="card">
+      <p class="card-title">Feedback Quality</p>
+      <div class="quality-grid">
+        <div class="quality-box green">
+          <div class="q-value" id="q-confirmed">—</div>
+          <div class="q-label">👍 Confirmed correct</div>
+        </div>
+        <div class="quality-box purple">
+          <div class="q-value" id="q-corrected">—</div>
+          <div class="q-label">✏️ Human corrections</div>
+        </div>
+        <div class="quality-box gray">
+          <div class="q-value" id="q-weak">—</div>
+          <div class="q-label">~ Weak signal (no correction submitted)</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Notify admin -->
+    <div class="card">
+      <p class="card-title">Notify Admin</p>
+      <div class="notify-section">
+        <p class="notify-desc">
+          When enough training pairs have been collected, click the button below to notify
+          the admin that a fine-tuning run can be started. The notification is recorded and,
+          if email is configured on the server, sent automatically.
+        </p>
+        <button id="notify-btn" disabled>Notify Admin to Start Fine-Tuning</button>
+        <div id="notify-status"></div>
+        <div id="last-notification-box" style="display:none" class="last-notification"></div>
+      </div>
+    </div>
+
+    <!-- Fine-tuning guide -->
+    <div class="card">
+      <button class="guide-toggle" id="guide-toggle">
+        <span>Fine-Tuning Guide — Steps for the Admin</span>
+        <span class="arrow">▾</span>
+      </button>
+      <div class="guide-content" id="guide-content">
+
+        <div class="note">
+          This guide targets the current server setup: Qwen2.5-VL 7B, NVIDIA V100 (16 GB),
+          Ubuntu, uv-managed Python environment.
+        </div>
+
+        <h3>Step 1 — Export the training dataset</h3>
+        <p>Run the export script from the project directory. It reads the archive and produces
+           a JSONL file of usable (image, text) pairs, skipping jobs with no feedback or only
+           weak signal.</p>
+        <pre>cd /home/hermes/arabic-ocr
+.venv/bin/python export_dataset.py --out dataset/arabic_ocr.jsonl</pre>
+        <p style="margin-top:0.5rem">Verify the output before proceeding — open a few entries and confirm the image paths
+           and corrected text look right.</p>
+
+        <h3>Step 2 — Install LLaMA-Factory</h3>
+        <pre>cd ~
+git clone https://github.com/hiyouga/LLaMA-Factory.git
+cd LLaMA-Factory
+pip install -e ".[torch,metrics]"</pre>
+
+        <h3>Step 3 — Register the dataset</h3>
+        <p>Add an entry to <code>LLaMA-Factory/data/dataset_info.json</code>:</p>
+        <pre>{
+  "arabic_ocr_corrections": {
+    "file_name": "/home/hermes/arabic-ocr/dataset/arabic_ocr.jsonl",
+    "formatting": "sharegpt",
+    "columns": { "messages": "conversations", "images": "images" }
+  }
+}</pre>
+
+        <h3>Step 4 — Run QLoRA fine-tuning</h3>
+        <div class="note">The V100 does not support bfloat16 — always use <code>--fp16</code>.</div>
+        <pre>cd ~/LLaMA-Factory
+llamafactory-cli train \
+  --model_name_or_path sherif1313/Arabic-English-handwritten-OCR-v3 \
+  --dataset arabic_ocr_corrections \
+  --template qwen2_vl \
+  --finetuning_type lora \
+  --quantization_bit 4 \
+  --output_dir /home/hermes/arabic-ocr/lora_output \
+  --num_train_epochs 3 \
+  --per_device_train_batch_size 1 \
+  --gradient_accumulation_steps 4 \
+  --learning_rate 1e-4 \
+  --lora_rank 16 \
+  --lora_target all \
+  --save_steps 100 \
+  --fp16</pre>
+
+        <h3>Step 5 — Evaluate before deploying</h3>
+        <p>Hold out ~10 % of pairs before Step 1 and run inference on them with the new adapter
+           to confirm CER (character error rate) improved. Do not deploy a model that scores
+           worse on the held-out set.</p>
+
+        <h3>Step 6 — Deploy the new model</h3>
+        <p>Update <code>MODEL_NAME</code> in <code>app.py</code> to point to the local adapter
+           output directory, then restart the service:</p>
+        <pre>sudo systemctl restart arabic-ocr
+journalctl -u arabic-ocr -f   # watch for load errors</pre>
+        <p style="margin-top:0.5rem">The service will load the fine-tuned weights at startup. Monitor the first few
+           jobs via the archive to confirm results improved.</p>
+
+      </div>
+    </div>
+
+    <p class="refresh-note" id="refresh-note">Auto-refreshes every 60 s</p>
+  </div>
+
+  <script>
+    const MILESTONES = [50, 100, 200, 500];
+
+    async function loadStats() {
+      try {
+        const res  = await fetch('/api/readiness');
+        const data = await res.json();
+        renderStats(data);
+      } catch (_) {}
+    }
+
+    function renderStats(d) {
+      // Overview
+      document.getElementById('total-jobs').textContent      = d.total_jobs;
+      document.getElementById('successful-jobs').textContent = d.successful_jobs;
+      document.getElementById('usable-pairs').textContent    = d.usable_pairs;
+      const coveragePct = d.with_feedback && d.successful_jobs
+        ? Math.round(d.with_feedback / d.successful_jobs * 100)
+        : 0;
+      document.getElementById('feedback-pct').textContent = coveragePct + '%';
+
+      // Progress bar
+      const fill  = document.getElementById('progress-fill');
+      const label = document.getElementById('progress-label');
+      const count = document.getElementById('progress-count');
+      fill.style.width = d.progress_pct + '%';
+
+      if (d.next_milestone) {
+        label.textContent = `${d.next_milestone_remaining} more pairs needed to reach the ${d.next_milestone}-pair milestone`;
+        count.textContent = `${d.usable_pairs} / ${d.next_milestone}`;
+      } else {
+        label.textContent = 'All milestones reached — ready for fine-tuning';
+        count.textContent = d.usable_pairs + ' pairs';
+      }
+
+      // Milestone markers
+      const row = document.getElementById('milestones-row');
+      row.innerHTML = '';
+      MILESTONES.forEach(m => {
+        const reached = d.usable_pairs >= m;
+        const isNext  = m === d.next_milestone;
+        const el = document.createElement('div');
+        el.className = 'milestone' + (reached ? ' reached' : '') + (isNext ? ' next' : '');
+        el.innerHTML = `
+          <div class="milestone-dot">${reached ? '✓' : ''}</div>
+          <div class="milestone-label">${m}</div>
+        `;
+        row.appendChild(el);
+      });
+
+      // Quality
+      document.getElementById('q-confirmed').textContent = d.confirmed_correct;
+      document.getElementById('q-corrected').textContent = d.corrected;
+      document.getElementById('q-weak').textContent      = d.weak_signal;
+
+      // Notify button
+      const btn    = document.getElementById('notify-btn');
+      const status = document.getElementById('notify-status');
+      btn.disabled = d.cooldown_remaining_seconds > 0;
+
+      if (d.cooldown_remaining_seconds > 0) {
+        const h = Math.ceil(d.cooldown_remaining_seconds / 3600);
+        status.className   = 'cool';
+        status.textContent = `Admin was already notified. Next notification available in ~${h}h.`;
+      } else {
+        status.textContent = '';
+      }
+
+      // Last notification
+      const lastBox = document.getElementById('last-notification-box');
+      if (d.last_notification) {
+        const ts  = new Date(d.last_notification.timestamp).toLocaleString();
+        lastBox.style.display = 'block';
+        lastBox.innerHTML =
+          `<strong>Last notification:</strong> ${ts} — ` +
+          `${d.last_notification.usable_pairs} pairs at time of request` +
+          (d.email_configured ? '' : ' <span style="color:#fbbf24">(email not configured — notification saved to disk only)</span>');
+      }
+
+      // Timestamp
+      document.getElementById('refresh-note').textContent =
+        `Last updated ${new Date().toLocaleTimeString()} · auto-refreshes every 60 s`;
+    }
+
+    // Notify admin
+    document.getElementById('notify-btn').addEventListener('click', async () => {
+      const btn    = document.getElementById('notify-btn');
+      const status = document.getElementById('notify-status');
+      btn.disabled = true;
+      status.className   = '';
+      status.textContent = 'Sending…';
+      try {
+        const res  = await fetch('/notify-admin', { method: 'POST' });
+        const data = await res.json();
+        if (data.ok) {
+          status.className   = 'ok';
+          status.textContent = '✓ Admin has been notified. They will review the fine-tuning guide and start the run.';
+        } else {
+          status.className   = 'err';
+          status.textContent = data.error || 'Failed to send notification.';
+        }
+      } catch (_) {
+        status.className   = 'err';
+        status.textContent = 'Network error — could not reach the server.';
+      }
+      await loadStats();
+    });
+
+    // Guide toggle
+    document.getElementById('guide-toggle').addEventListener('click', () => {
+      const btn     = document.getElementById('guide-toggle');
+      const content = document.getElementById('guide-content');
+      btn.classList.toggle('open');
+      content.classList.toggle('visible');
+    });
+
+    loadStats();
+    setInterval(loadStats, 60000);
+  </script>
+</body>
+</html>

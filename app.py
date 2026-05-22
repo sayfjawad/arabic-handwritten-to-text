@@ -2,11 +2,13 @@ import io
 import json
 import os
 import secrets
+import smtplib
 import threading
 import time
 import traceback
 import uuid
 from datetime import datetime, timezone
+from email.message import EmailMessage
 
 import cv2
 import numpy as np
@@ -38,8 +40,12 @@ def _gen_captcha_text(length: int = 5) -> str:
     return "".join(secrets.choice(_CAPTCHA_CHARS) for _ in range(length))
 
 
-UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
-ARCHIVE_DIR = os.path.join(os.path.dirname(__file__), "archive")
+UPLOAD_DIR        = os.path.join(os.path.dirname(__file__), "uploads")
+ARCHIVE_DIR       = os.path.join(os.path.dirname(__file__), "archive")
+NOTIFICATIONS_FILE = os.path.join(os.path.dirname(__file__), "notifications.json")
+NOTIFY_COOLDOWN   = 6 * 3600   # seconds between admin notifications
+MILESTONES        = [50, 100, 200, 500]
+
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(ARCHIVE_DIR, exist_ok=True)
 
@@ -52,6 +58,12 @@ model_lock = threading.Lock()
 model_loading = False
 model_error = None
 
+_notifications_lock = threading.Lock()
+_stats_cache: dict = {"data": None, "ts": 0.0}
+_STATS_TTL = 60  # seconds
+
+
+# ── Model ────────────────────────────────────────────────────────────────────
 
 def _force_lm_head_to_embeddings(m):
     input_emb = m.get_input_embeddings()
@@ -86,6 +98,8 @@ def load_model_background():
     finally:
         model_loading = False
 
+
+# ── Image processing ─────────────────────────────────────────────────────────
 
 def preprocess_image(img_bytes: bytes) -> tuple[np.ndarray, tuple[int, int]]:
     """Returns (processed_array, (original_h, original_w))."""
@@ -169,6 +183,8 @@ def run_ocr(processed: np.ndarray) -> tuple[str, int]:
             os.remove(tmp_path)
 
 
+# ── Archive ──────────────────────────────────────────────────────────────────
+
 def _write_archive(
     job_id: str,
     meta: dict,
@@ -214,9 +230,157 @@ def _find_job_meta_path(job_id: str) -> str | None:
     return None
 
 
+# ── Readiness stats ──────────────────────────────────────────────────────────
+
+def compute_readiness_stats() -> dict:
+    now = time.monotonic()
+    if _stats_cache["data"] and now - _stats_cache["ts"] < _STATS_TTL:
+        return _stats_cache["data"]
+
+    stats = {
+        "total_jobs": 0,
+        "successful_jobs": 0,
+        "error_jobs": 0,
+        "with_feedback": 0,
+        "usable_pairs": 0,
+        "confirmed_correct": 0,
+        "corrected": 0,
+        "weak_signal": 0,
+    }
+
+    if os.path.isdir(ARCHIVE_DIR):
+        for date_dir in os.listdir(ARCHIVE_DIR):
+            date_path = os.path.join(ARCHIVE_DIR, date_dir)
+            if not os.path.isdir(date_path):
+                continue
+            for job_id in os.listdir(date_path):
+                meta_path = os.path.join(date_path, job_id, "meta.json")
+                if not os.path.exists(meta_path):
+                    continue
+                try:
+                    with open(meta_path, "r", encoding="utf-8") as f:
+                        meta = json.load(f)
+                except Exception:
+                    continue
+
+                stats["total_jobs"] += 1
+                if meta.get("status") != "success":
+                    stats["error_jobs"] += 1
+                    continue
+                stats["successful_jobs"] += 1
+
+                rating = meta.get("feedback_rating")
+                is_correction = meta.get("feedback_is_correction", False)
+
+                if not rating:
+                    continue
+                stats["with_feedback"] += 1
+                if is_correction:
+                    stats["corrected"] += 1
+                    stats["usable_pairs"] += 1
+                elif rating == "up":
+                    stats["confirmed_correct"] += 1
+                    stats["usable_pairs"] += 1
+                else:
+                    stats["weak_signal"] += 1
+
+    # Milestone info
+    usable = stats["usable_pairs"]
+    next_ms = next((m for m in MILESTONES if m > usable), None)
+    last_ms = max((m for m in MILESTONES if m <= usable), default=0)
+    stats["milestones"] = MILESTONES
+    stats["last_milestone_reached"] = last_ms
+    stats["next_milestone"] = next_ms
+    stats["next_milestone_remaining"] = (next_ms - usable) if next_ms else 0
+    stats["progress_pct"] = (
+        round((usable - last_ms) / (next_ms - last_ms) * 100)
+        if next_ms else 100
+    )
+
+    _stats_cache["data"] = stats
+    _stats_cache["ts"] = now
+    return stats
+
+
+# ── Notifications ─────────────────────────────────────────────────────────────
+
+def _load_notifications() -> list:
+    if not os.path.exists(NOTIFICATIONS_FILE):
+        return []
+    try:
+        with open(NOTIFICATIONS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+
+def _save_notifications(notifications: list):
+    with open(NOTIFICATIONS_FILE, "w", encoding="utf-8") as f:
+        json.dump(notifications, f, ensure_ascii=False, indent=2)
+
+
+def _try_send_email(notification: dict):
+    admin_email = os.environ.get("ADMIN_EMAIL")
+    smtp_host   = os.environ.get("SMTP_HOST")
+    if not admin_email or not smtp_host:
+        return
+    try:
+        msg = EmailMessage()
+        msg["Subject"] = f"[Arabic OCR] Fine-tuning ready — {notification['usable_pairs']} training pairs"
+        msg["From"]    = os.environ.get("SMTP_FROM", admin_email)
+        msg["To"]      = admin_email
+        msg.set_content(
+            f"A user has requested a fine-tuning review.\n\n"
+            f"Usable training pairs : {notification['usable_pairs']}\n"
+            f"Confirmed correct     : {notification['confirmed_correct']}\n"
+            f"Human corrections     : {notification['corrected']}\n"
+            f"Timestamp             : {notification['timestamp']}\n\n"
+            f"Visit /dashboard to see the full readiness report."
+        )
+        smtp_port = int(os.environ.get("SMTP_PORT", 587))
+        smtp_user = os.environ.get("SMTP_USER", "")
+        smtp_pass = os.environ.get("SMTP_PASS", "")
+        with smtplib.SMTP(smtp_host, smtp_port) as s:
+            if smtp_user:
+                s.starttls()
+                s.login(smtp_user, smtp_pass)
+            s.send_message(msg)
+        print(f"[notify] Email sent to {admin_email}")
+    except Exception as e:
+        print(f"[notify] Email failed: {e}")
+
+
+# ── Routes ───────────────────────────────────────────────────────────────────
+
 @app.route("/")
 def index():
     return render_template("index.html")
+
+
+@app.route("/dashboard")
+def dashboard():
+    return render_template("dashboard.html")
+
+
+@app.route("/api/readiness")
+def api_readiness():
+    stats = compute_readiness_stats()
+    with _notifications_lock:
+        notifications = _load_notifications()
+
+    last_notification = notifications[-1] if notifications else None
+    cooldown_remaining = 0
+    if last_notification:
+        last_dt  = datetime.fromisoformat(last_notification["timestamp"])
+        elapsed  = (datetime.now(timezone.utc) - last_dt).total_seconds()
+        cooldown_remaining = max(0, int(NOTIFY_COOLDOWN - elapsed))
+
+    return jsonify({
+        **stats,
+        "last_notification": last_notification,
+        "cooldown_remaining_seconds": cooldown_remaining,
+        "email_configured": bool(os.environ.get("ADMIN_EMAIL") and os.environ.get("SMTP_HOST")),
+    })
 
 
 @app.route("/captcha")
@@ -239,40 +403,72 @@ def status():
         return jsonify({"status": "ready"})
 
 
+@app.route("/notify-admin", methods=["POST"])
+@limiter.limit("5 per hour")
+def notify_admin():
+    with _notifications_lock:
+        notifications = _load_notifications()
+        if notifications:
+            last_dt  = datetime.fromisoformat(notifications[-1]["timestamp"])
+            elapsed  = (datetime.now(timezone.utc) - last_dt).total_seconds()
+            if elapsed < NOTIFY_COOLDOWN:
+                hours_left = max(1, int((NOTIFY_COOLDOWN - elapsed) / 3600))
+                return jsonify({
+                    "error": f"Admin was already notified recently. Please wait ~{hours_left}h before notifying again."
+                }), 429
+
+        stats = compute_readiness_stats()
+        notification = {
+            "timestamp":         datetime.now(timezone.utc).isoformat(),
+            "usable_pairs":      stats["usable_pairs"],
+            "confirmed_correct": stats["confirmed_correct"],
+            "corrected":         stats["corrected"],
+            "message":           (
+                f"Fine-tuning readiness: {stats['usable_pairs']} usable training pairs available "
+                f"({stats['confirmed_correct']} confirmed, {stats['corrected']} corrected)."
+            ),
+        }
+        notifications.append(notification)
+        _save_notifications(notifications)
+
+    threading.Thread(target=_try_send_email, args=(notification,), daemon=True).start()
+    return jsonify({"ok": True})
+
+
 @app.route("/process", methods=["POST"])
 @limiter.limit("20 per minute")
 def process():
-    job_id = uuid.uuid4().hex
+    job_id  = uuid.uuid4().hex
     t_start = time.monotonic()
 
     meta = {
-        "job_id": job_id,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "model": MODEL_NAME,
-        "original_filename": None,
-        "file_size_bytes": None,
-        "file_ext": None,
-        "client_ip": get_remote_address(),
-        "status": "error",
-        "error_stage": None,
-        "error": None,
-        "result": None,
-        "tokens_generated": None,
-        "input_image_shape": None,
+        "job_id":               job_id,
+        "timestamp":            datetime.now(timezone.utc).isoformat(),
+        "model":                MODEL_NAME,
+        "original_filename":    None,
+        "file_size_bytes":      None,
+        "file_ext":             None,
+        "client_ip":            get_remote_address(),
+        "status":               "error",
+        "error_stage":          None,
+        "error":                None,
+        "result":               None,
+        "tokens_generated":     None,
+        "input_image_shape":    None,
         "processed_image_shape": None,
         "duration_preprocess_ms": None,
-        "duration_ocr_ms": None,
-        "duration_total_ms": None,
+        "duration_ocr_ms":      None,
+        "duration_total_ms":    None,
     }
     input_bytes = None
-    processed = None
+    processed   = None
 
     # --- CAPTCHA check ---
     user_answer = request.form.get("captcha", "").strip().upper()
-    expected = session.pop("captcha", None)
+    expected    = session.pop("captcha", None)
     if not expected or user_answer != expected:
         meta["error_stage"] = "captcha"
-        meta["error"] = "Invalid CAPTCHA"
+        meta["error"]       = "Invalid CAPTCHA"
         meta["duration_total_ms"] = round((time.monotonic() - t_start) * 1000)
         _archive_async(job_id, meta, input_bytes, processed)
         return jsonify({"error": "Invalid CAPTCHA. Please try again.", "captcha_error": True}), 400
@@ -281,13 +477,13 @@ def process():
     with model_lock:
         if model_error:
             meta["error_stage"] = "model"
-            meta["error"] = model_error
+            meta["error"]       = model_error
             meta["duration_total_ms"] = round((time.monotonic() - t_start) * 1000)
             _archive_async(job_id, meta, input_bytes, processed)
             return jsonify({"error": f"Model failed to load: {model_error}"}), 500
         if model is None:
             meta["error_stage"] = "model"
-            meta["error"] = "Model not yet loaded"
+            meta["error"]       = "Model not yet loaded"
             meta["duration_total_ms"] = round((time.monotonic() - t_start) * 1000)
             _archive_async(job_id, meta, input_bytes, processed)
             return jsonify({"error": "Model is still loading, please wait."}), 503
@@ -295,7 +491,7 @@ def process():
     # --- File validation ---
     if "image" not in request.files:
         meta["error_stage"] = "validation"
-        meta["error"] = "No image file provided"
+        meta["error"]       = "No image file provided"
         meta["duration_total_ms"] = round((time.monotonic() - t_start) * 1000)
         _archive_async(job_id, meta, input_bytes, processed)
         return jsonify({"error": "No image file provided."}), 400
@@ -303,7 +499,7 @@ def process():
     file = request.files["image"]
     if not file.filename:
         meta["error_stage"] = "validation"
-        meta["error"] = "No file selected"
+        meta["error"]       = "No file selected"
         meta["duration_total_ms"] = round((time.monotonic() - t_start) * 1000)
         _archive_async(job_id, meta, input_bytes, processed)
         return jsonify({"error": "No file selected."}), 400
@@ -311,28 +507,28 @@ def process():
     ext = os.path.splitext(file.filename)[1].lower()
     if ext not in ALLOWED_EXTENSIONS:
         meta["error_stage"] = "validation"
-        meta["error"] = f"Unsupported file type: {ext}"
+        meta["error"]       = f"Unsupported file type: {ext}"
         meta["duration_total_ms"] = round((time.monotonic() - t_start) * 1000)
         _archive_async(job_id, meta, input_bytes, processed)
         return jsonify({"error": f"Unsupported file type: {ext}"}), 400
 
-    input_bytes = file.read()
+    input_bytes              = file.read()
     meta["original_filename"] = file.filename
-    meta["file_size_bytes"] = len(input_bytes)
-    meta["file_ext"] = ext
+    meta["file_size_bytes"]   = len(input_bytes)
+    meta["file_ext"]          = ext
 
     # --- Preprocessing ---
     t_pre = time.monotonic()
     try:
         processed, orig_shape = preprocess_image(input_bytes)
-        meta["duration_preprocess_ms"] = round((time.monotonic() - t_pre) * 1000)
-        meta["input_image_shape"] = list(orig_shape)
-        meta["processed_image_shape"] = list(processed.shape[:2])
+        meta["duration_preprocess_ms"]  = round((time.monotonic() - t_pre) * 1000)
+        meta["input_image_shape"]       = list(orig_shape)
+        meta["processed_image_shape"]   = list(processed.shape[:2])
     except Exception as e:
-        meta["error_stage"] = "preprocessing"
-        meta["error"] = str(e)
-        meta["duration_preprocess_ms"] = round((time.monotonic() - t_pre) * 1000)
-        meta["duration_total_ms"] = round((time.monotonic() - t_start) * 1000)
+        meta["error_stage"]             = "preprocessing"
+        meta["error"]                   = str(e)
+        meta["duration_preprocess_ms"]  = round((time.monotonic() - t_pre) * 1000)
+        meta["duration_total_ms"]       = round((time.monotonic() - t_start) * 1000)
         _archive_async(job_id, meta, input_bytes, processed)
         return jsonify({"error": f"Image preprocessing failed: {e}"}), 422
 
@@ -340,15 +536,15 @@ def process():
     t_ocr = time.monotonic()
     try:
         text, tokens_generated = run_ocr(processed)
-        meta["duration_ocr_ms"] = round((time.monotonic() - t_ocr) * 1000)
-        meta["result"] = text
-        meta["tokens_generated"] = tokens_generated
-        meta["status"] = "success"
+        meta["duration_ocr_ms"]     = round((time.monotonic() - t_ocr) * 1000)
+        meta["result"]              = text
+        meta["tokens_generated"]    = tokens_generated
+        meta["status"]              = "success"
     except Exception as e:
-        meta["error_stage"] = "ocr"
-        meta["error"] = str(e)
-        meta["duration_ocr_ms"] = round((time.monotonic() - t_ocr) * 1000)
-        meta["duration_total_ms"] = round((time.monotonic() - t_start) * 1000)
+        meta["error_stage"]         = "ocr"
+        meta["error"]               = str(e)
+        meta["duration_ocr_ms"]     = round((time.monotonic() - t_ocr) * 1000)
+        meta["duration_total_ms"]   = round((time.monotonic() - t_start) * 1000)
         _archive_async(job_id, meta, input_bytes, processed)
         return jsonify({"error": f"OCR failed: {e}"}), 500
 
@@ -360,8 +556,8 @@ def process():
 @app.route("/feedback", methods=["POST"])
 @limiter.limit("30 per minute")
 def feedback():
-    job_id = request.form.get("job_id", "").strip()
-    rating = request.form.get("rating", "").strip()
+    job_id         = request.form.get("job_id", "").strip()
+    rating         = request.form.get("rating", "").strip()
     corrected_text = request.form.get("corrected_text", "")
 
     if not job_id:
@@ -377,13 +573,13 @@ def feedback():
         with open(meta_path, "r", encoding="utf-8") as f:
             meta = json.load(f)
 
-        predicted = meta.get("result", "")
+        predicted    = meta.get("result", "")
         is_correction = bool(corrected_text) and corrected_text != predicted
 
-        meta["feedback_rating"] = rating
+        meta["feedback_rating"]         = rating
         meta["feedback_corrected_text"] = corrected_text if is_correction else None
-        meta["feedback_is_correction"] = is_correction
-        meta["feedback_timestamp"] = datetime.now(timezone.utc).isoformat()
+        meta["feedback_is_correction"]  = is_correction
+        meta["feedback_timestamp"]      = datetime.now(timezone.utc).isoformat()
 
         with open(meta_path, "w", encoding="utf-8") as f:
             json.dump(meta, f, ensure_ascii=False, indent=2)
@@ -393,6 +589,7 @@ def feedback():
             with open(correction_path, "w", encoding="utf-8") as f:
                 f.write(corrected_text)
 
+        _stats_cache["data"] = None  # invalidate cache after feedback
         return jsonify({"ok": True})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -401,7 +598,7 @@ def feedback():
 @app.route("/download", methods=["POST"])
 def download():
     text = request.form.get("text", "")
-    buf = io.BytesIO(text.encode("utf-8-sig"))
+    buf  = io.BytesIO(text.encode("utf-8-sig"))
     buf.seek(0)
     return send_file(
         buf,
