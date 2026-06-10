@@ -12,8 +12,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /workspace
 
-# torch and torchvision are provided by the base image; only install the rest.
+# torch and torchvision are provided by the base image.
+# Strip the index-url directives and torch pins before installing the rest
+# so pip doesn't re-download 700 MB of PyTorch that's already present.
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN grep -vE '^--index-url|^--extra-index-url|^torch==|^torchvision==' requirements.txt \
+    > /tmp/req-no-torch.txt && \
+    pip install --no-cache-dir -r /tmp/req-no-torch.txt
 
 CMD ["bash"]
