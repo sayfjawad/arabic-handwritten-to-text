@@ -4,6 +4,8 @@ __pycache__/
 *.pyo
 .cache/
 uploads/
+archive/
+notifications.json
 server.log
 images/
 processed_images/

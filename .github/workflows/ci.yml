@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-and-check:
+    name: Syntax & import check
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check Python syntax (all .py files)
+        run: |
+          python -m py_compile app.py ocr_arabic.py preprocess_images.py export_dataset.py
+          echo "Syntax OK"
+
+      - name: Install CPU deps for import check
+        run: |
+          pip install --quiet \
+            torch==2.6.0 \
+            transformers>=4.49.0,<5.0.0 \
+            accelerate \
+            pillow \
+            qwen-vl-utils \
+            sentencepiece \
+            protobuf \
+            safetensors \
+            opencv-python-headless \
+            numpy \
+            flask \
+            flask-limiter \
+            captcha \
+            gunicorn
+
+      - name: Verify critical imports resolve
+        run: |
+          python - <<'EOF'
+          from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
+          import torch, cv2, flask
+          print("torch:", torch.__version__)
+          print("All imports OK")
+          EOF
+
+      - name: Check requirements.txt pins a CUDA torch build
+        run: |
+          grep -q "cu1" requirements.txt || \
+            (echo "ERROR: requirements.txt does not pin a CUDA torch build (expected +cu1xx)." && exit 1)
+          echo "CUDA pin present"

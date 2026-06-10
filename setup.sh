@@ -71,17 +71,17 @@ ok "Python $($PYTHON --version)"
 # It is NOT listed in pyproject.toml to prevent package managers from
 # silently pulling in the CPU-only or wrong-CUDA build from PyPI.
 
-step "Installing PyTorch (CUDA 12.1)..."
+step "Installing PyTorch (CUDA 12.4)..."
 uv pip install --python "$PYTHON" \
-    "torch" "torchvision" \
-    --index-url https://download.pytorch.org/whl/cu121
+    "torch==2.6.0+cu124" "torchvision==0.21.0+cu124" \
+    --index-url https://download.pytorch.org/whl/cu124
 ok "PyTorch installed"
 
 # ── 5. Remaining dependencies ─────────────────────────────────────────────────
 
 step "Installing project dependencies..."
 uv pip install --python "$PYTHON" \
-    "transformers>=4.49.0" \
+    "transformers>=4.49.0,<5.0.0" \
     "accelerate>=0.24.0" \
     "pillow>=10.0.0" \
     "qwen-vl-utils>=0.0.2" \

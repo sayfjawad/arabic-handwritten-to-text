@@ -74,16 +74,33 @@ def _force_lm_head_to_embeddings(m):
     return m
 
 
+def _single_gpu_device_config():
+    if not torch.cuda.is_available():
+        return "cpu", None
+    n = torch.cuda.device_count()
+    free_gb = [torch.cuda.mem_get_info(i)[0] / 1024 ** 3 for i in range(n)]
+    best = max(range(n), key=lambda i: free_gb[i])
+    max_memory = {i: "0GiB" for i in range(n)}
+    max_memory[best] = f"{int(free_gb[best] * 0.9)}GiB"
+    max_memory["cpu"] = "32GiB"
+    print(f"Using GPU {best}: {torch.cuda.get_device_name(best)} ({free_gb[best]:.1f} GiB free)")
+    return "auto", max_memory
+
+
 def load_model_background():
     global model, processor, model_loading, model_error
     try:
         print(f"Loading model {MODEL_NAME} ...")
-        m = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-            MODEL_NAME,
-            torch_dtype=torch.float16,
-            device_map="auto",
+        device_map, max_memory = _single_gpu_device_config()
+        kwargs = dict(
+            dtype=torch.float16,
+            device_map=device_map,
             trust_remote_code=True,
+            attn_implementation="eager",
         )
+        if max_memory is not None:
+            kwargs["max_memory"] = max_memory
+        m = Qwen2_5_VLForConditionalGeneration.from_pretrained(MODEL_NAME, **kwargs)
         m = _force_lm_head_to_embeddings(m)
         p = AutoProcessor.from_pretrained(MODEL_NAME, trust_remote_code=True)
         m.eval()
