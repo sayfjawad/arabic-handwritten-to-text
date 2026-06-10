@@ -5,8 +5,8 @@ After=network.target
 [Service]
 Type=simple
 User=hermes
-WorkingDirectory=/home/hermes/arabic-ocr
-ExecStart=/home/hermes/arabic-ocr/.venv/bin/gunicorn --workers 1 --bind 0.0.0.0:5000 --timeout 300 app:app
+WorkingDirectory=/home/hermes/arabic-handwritten-to-text
+ExecStart=/home/hermes/arabic-handwritten-to-text/.venv/bin/gunicorn --workers 1 --bind 0.0.0.0:5000 --timeout 300 app:app
 Restart=on-failure
 RestartSec=10
 StandardOutput=journal
